@@ -193,3 +193,43 @@
 // =============================================================================
 
 package paxos
+
+type Prepare struct {
+	ProposalNumber ProposalNumber
+	From string
+}
+
+type Promise struct {
+	ProposalNumber ProposalNumber
+	AcceptedProposal ProposalNumber
+	AcceptedValue []byte
+	From string
+	OK bool
+}
+
+type Reject struct {
+	ProposalNumber ProposalNumber
+	HighestSeen ProposalNumber
+	From string
+}
+
+type Accept struct {
+	ProposalNumber ProposalNumber
+	Value []byte
+	From string
+}
+
+type Accepted struct {
+	ProposalNumber ProposalNumber
+	Value []byte
+	From string
+	OK bool
+}
+
+type Learn struct {
+	ProposalNumber ProposalNumber
+	Value []byte
+	From string
+}
+
+
