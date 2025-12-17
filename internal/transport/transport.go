@@ -229,6 +229,26 @@
 
 package transport
 
-// Import the paxos package for message types.
-// Uncomment when implementing:
-// import "github.com/quorum/paxos/internal/paxos"
+import (
+	"errors"
+	"time"
+)
+
+type Message interface {
+	GetFrom() string
+}
+
+type Transport interface {
+	Send(to string, msg Message) error
+	Broadcast(msg Message) error
+	Receive() (Message, error)
+	ReceiveTimeout(timeout time.Duration) (Message, error)
+	Close() error
+}
+
+var (
+	ErrTimeout    = errors.New("receive timeout")
+	ErrClosed     = errors.New("transport closed")
+	ErrUnknownNode = errors.New("unknown node")
+	ErrInboxFull  = errors.New("inbox full")
+)

@@ -295,9 +295,166 @@
 
 package node
 
-// Imports needed:
-// import (
-//     "github.com/quorum/paxos/internal/paxos"
-//     "github.com/quorum/paxos/internal/storage"
-//     "github.com/quorum/paxos/internal/transport"
-// )
+import (
+	"log"
+	"sync"
+	"time"
+
+	"quorum/internal/paxos"
+	"quorum/internal/storage"
+	"quorum/internal/transport"
+)
+
+type Node struct {
+	id         string
+	proposer   *paxos.Proposer
+	acceptor   *paxos.Acceptor
+	learner    *paxos.Learner
+	transport  transport.Transport
+	storage    storage.Storage
+	quorumSize int
+	mu         sync.Mutex
+	running    bool
+	stopCh     chan struct{}
+	wg         sync.WaitGroup
+}
+
+func NewNode(id string, quorumSize int, t transport.Transport, s storage.Storage) *Node {
+	acceptor := paxos.NewAcceptor(id, s)
+	learner := paxos.NewLearner(id, quorumSize)
+	proposerTransport := &proposerTransportAdapter{transport: t}
+	proposer := paxos.NewProposer(id, quorumSize, proposerTransport)
+	return &Node{
+		id:         id,
+		proposer:   proposer,
+		acceptor:   acceptor,
+		learner:    learner,
+		transport:  t,
+		storage:    s,
+		quorumSize: quorumSize,
+		stopCh:     make(chan struct{}),
+	}
+}
+
+func (n *Node) Start() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.running {
+		return nil
+	}
+	n.running = true
+	n.stopCh = make(chan struct{})
+	n.wg.Add(1)
+	go n.handleMessages()
+	return nil
+}
+
+func (n *Node) Stop() error {
+	n.mu.Lock()
+	if !n.running {
+		n.mu.Unlock()
+		return nil
+	}
+	n.running = false
+	close(n.stopCh)
+	n.mu.Unlock()
+	n.wg.Wait()
+	return nil
+}
+
+func (n *Node) handleMessages() {
+	defer n.wg.Done()
+	for {
+		select {
+		case <-n.stopCh:
+			return
+		default:
+			msg, err := n.transport.ReceiveTimeout(100 * time.Millisecond)
+			if err == transport.ErrTimeout {
+				continue
+			}
+			if err != nil {
+				log.Printf("[%s] receive error: %v", n.id, err)
+				continue
+			}
+			n.routeMessage(msg)
+		}
+	}
+}
+
+func (n *Node) routeMessage(msg transport.Message) {
+	switch m := msg.(type) {
+	case paxos.Prepare:
+		response := n.acceptor.HandlePrepare(m)
+		n.transport.Send(m.From, response)
+
+	case *paxos.Prepare:
+		response := n.acceptor.HandlePrepare(*m)
+		n.transport.Send(m.From, response)
+	case paxos.Accept:
+		response := n.acceptor.HandleAccept(m)
+		n.transport.Send(m.From, response)
+		if response.OK {
+			n.learner.HandleAccepted(response)
+		}
+	case *paxos.Accept:
+		response := n.acceptor.HandleAccept(*m)
+		n.transport.Send(m.From, response)
+		if response.OK {
+			n.learner.HandleAccepted(response)
+		}
+	case paxos.Accepted:
+		n.learner.HandleAccepted(m)
+
+	case *paxos.Accepted:
+		n.learner.HandleAccepted(*m)
+
+	case paxos.Learn:
+		n.learner.HandleLearn(m)
+
+	case *paxos.Learn:
+		n.learner.HandleLearn(*m)
+	default:
+		log.Printf("[%s] unknown message type: %T", n.id, msg)
+	}
+}
+
+func (n *Node) Propose(value []byte) ([]byte, error) {
+	return n.proposer.Propose(value)
+}
+
+func (n *Node) GetChosenValue() ([]byte, bool) {
+	return n.learner.GetChosenValue()
+}
+
+func (n *Node) ID() string {
+	return n.id
+}
+
+type proposerTransportAdapter struct {
+	transport transport.Transport
+}
+
+func (a *proposerTransportAdapter) Broadcast(msg interface{}) error {
+	if m, ok := msg.(transport.Message); ok {
+		return a.transport.Broadcast(m)
+	}
+	return a.transport.Broadcast(&messageWrapper{msg: msg})
+}
+
+func (a *proposerTransportAdapter) Receive() (interface{}, error) {
+	msg, err := a.transport.Receive()
+	if err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+type messageWrapper struct {
+	msg  interface{}
+	from string
+}
+
+func (w *messageWrapper) GetFrom() string {
+	return w.from
+}

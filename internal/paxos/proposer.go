@@ -259,6 +259,11 @@ import (
 	"sync"
 )
 
+type Transport interface {
+	Broadcast(msg interface{}) error
+	Receive() (interface{}, error)
+}
+
 type Proposer struct {
 	id string
 	highestRound int64

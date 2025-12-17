@@ -237,6 +237,145 @@
 
 package transport
 
-// Import sync for mutex.
-// Uncomment when implementing:
-// import "sync"
+import (
+	"sync"
+	"time"
+)
+
+type Network struct {
+	channels map[string]chan Message
+	mu       sync.RWMutex
+}
+
+func NewNetwork() *Network {
+	return &Network{
+		channels: make(map[string]chan Message),
+	}
+}
+
+func (n *Network) AddNode(id string) *MemoryTransport {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	inbox := make(chan Message, 100) 
+	n.channels[id] = inbox
+	return &MemoryTransport{
+		nodeID:  id,
+		inbox:   inbox,
+		network: n,
+	}
+}
+
+func (n *Network) RemoveNode(id string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.channels, id)
+}
+
+func (n *Network) getChannel(id string) (chan Message, bool) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	ch, ok := n.channels[id]
+	return ch, ok
+}
+
+func (n *Network) getAllNodes() []string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	nodes := make([]string, 0, len(n.channels))
+	for id := range n.channels {
+		nodes = append(nodes, id)
+	}
+	return nodes
+}
+
+type MemoryTransport struct {
+	nodeID  string
+	inbox   chan Message
+	network *Network
+	closed  bool
+	mu      sync.Mutex
+}
+
+func (t *MemoryTransport) Send(to string, msg Message) error {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return ErrClosed
+	}
+	t.mu.Unlock()
+	destInbox, ok := t.network.getChannel(to)
+	if !ok {
+		return ErrUnknownNode
+	}
+	select {
+	case destInbox <- msg:
+		return nil
+	default:
+		return ErrInboxFull
+	}
+}
+
+func (t *MemoryTransport) Broadcast(msg Message) error {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return ErrClosed
+	}
+	t.mu.Unlock()
+	nodes := t.network.getAllNodes()
+	for _, nodeID := range nodes {
+		if nodeID == t.nodeID {
+			continue 
+		}
+		t.Send(nodeID, msg)
+	}
+	return nil
+}
+
+func (t *MemoryTransport) Receive() (Message, error) {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil, ErrClosed
+	}
+	t.mu.Unlock()
+	msg, ok := <-t.inbox
+	if !ok {
+		return nil, ErrClosed
+	}
+	return msg, nil
+}
+
+func (t *MemoryTransport) ReceiveTimeout(timeout time.Duration) (Message, error) {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil, ErrClosed
+	}
+	t.mu.Unlock()
+	select {
+	case msg, ok := <-t.inbox:
+		if !ok {
+			return nil, ErrClosed
+		}
+		return msg, nil
+	case <-time.After(timeout):
+		return nil, ErrTimeout
+	}
+}
+
+func (t *MemoryTransport) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return nil
+	}
+	t.closed = true
+	close(t.inbox)
+	t.network.RemoveNode(t.nodeID)
+	return nil
+}
+
+func (t *MemoryTransport) NodeID() string {
+	return t.nodeID
+}

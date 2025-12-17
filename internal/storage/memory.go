@@ -184,6 +184,62 @@
 
 package storage
 
-// Import the paxos package to use ProposalNumber type.
-// Uncomment when implementing:
-// import "github.com/quorum/paxos/internal/paxos"
+import "sync"
+
+type MemoryStorage struct {
+	highestPromised  ProposalNumber
+	acceptedProposal ProposalNumber
+	acceptedValue    []byte
+	mu               sync.RWMutex
+}
+
+func NewMemoryStorage() *MemoryStorage {
+	return &MemoryStorage{}
+}
+
+func (m *MemoryStorage) SavePromised(proposal ProposalNumber) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.highestPromised = proposal
+	return nil
+}
+
+func (m *MemoryStorage) LoadPromised() (ProposalNumber, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.highestPromised, nil
+}
+
+func (m *MemoryStorage) SaveAccepted(proposal ProposalNumber, value []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.acceptedProposal = proposal
+	m.acceptedValue = make([]byte, len(value))
+	copy(m.acceptedValue, value)
+	return nil
+}
+
+func (m *MemoryStorage) LoadAccepted() (ProposalNumber, []byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]byte, len(m.acceptedValue))
+	copy(result, m.acceptedValue)
+	return m.acceptedProposal, result, nil
+}
+
+func (m *MemoryStorage) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.highestPromised = ProposalNumber{}
+	m.acceptedProposal = ProposalNumber{}
+	m.acceptedValue = nil
+	return nil
+}
+
+func (m *MemoryStorage) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.highestPromised = ProposalNumber{}
+	m.acceptedProposal = ProposalNumber{}
+	m.acceptedValue = nil
+}

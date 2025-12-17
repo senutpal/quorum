@@ -269,19 +269,86 @@
 
 package main
 
-// Imports needed:
-// import (
-//     "fmt"
-//     "log"
-//     "time"
-//     "github.com/quorum/paxos/internal/node"
-//     "github.com/quorum/paxos/internal/storage"
-//     "github.com/quorum/paxos/internal/transport"
-// )
+import (
+	"fmt"
+	"log"
+	"time"
 
-// TODO: Implement the main function following the demo scenario above.
-// This stub exists only to satisfy Go's requirement that package main
-// must have a main function.
+	"quorum/internal/node"
+	"quorum/internal/storage"
+	"quorum/internal/transport"
+)
+
 func main() {
-	// Implementation goes here - see the TODO section above for the full algorithm.
+	fmt.Println("=============================================================================")
+	fmt.Println("                    Single-Decree Paxos Demo")
+	fmt.Println("=============================================================================")
+	fmt.Println()
+
+	numNodes := 5
+	quorumSize := (numNodes / 2) + 1 // Majority = 3
+
+	fmt.Printf("Starting Paxos cluster with %d nodes...\n", numNodes)
+	fmt.Printf("Quorum size: %d\n\n", quorumSize)
+
+	network := transport.NewNetwork()
+
+	nodes := make([]*node.Node, numNodes)
+	for i := 0; i < numNodes; i++ {
+		id := fmt.Sprintf("node-%d", i)
+		s := storage.NewMemoryStorage()
+		trans := network.AddNode(id)
+		nodes[i] = node.NewNode(id, quorumSize, trans, s)
+	}
+
+	for _, n := range nodes {
+		if err := n.Start(); err != nil {
+			log.Fatalf("Failed to start node: %v", err)
+		}
+	}
+	fmt.Println("All nodes started!")
+	fmt.Println()
+
+	value := []byte("hello, paxos!")
+	fmt.Printf("Node-0 proposing: \"%s\"\n\n", string(value))
+
+	chosenValue, err := nodes[0].Propose(value)
+	if err != nil {
+		log.Fatalf("Propose failed: %v", err)
+	}
+
+	fmt.Println()
+	fmt.Printf("✓ Chosen value: \"%s\"\n\n", string(chosenValue))
+
+	time.Sleep(100 * time.Millisecond)
+
+	fmt.Println("Final state (what each node learned):")
+	fmt.Println("─────────────────────────────────────")
+
+	allAgree := true
+	for i, n := range nodes {
+		v, ok := n.GetChosenValue()
+		if ok {
+			fmt.Printf("  Node-%d: learned \"%s\" ✓\n", i, string(v))
+			if string(v) != string(chosenValue) {
+				allAgree = false
+			}
+		} else {
+			fmt.Printf("  Node-%d: learned nothing yet ✗\n", i)
+		}
+	}
+	fmt.Println()
+
+	if allAgree {
+		fmt.Println("✓ Consensus achieved! All nodes that learned agree on the value.")
+	} else {
+		fmt.Println("✗ SAFETY VIOLATION: Nodes disagree on the chosen value!")
+	}
+
+	fmt.Println()
+	fmt.Println("Stopping all nodes...")
+	for _, n := range nodes {
+		n.Stop()
+	}
+	fmt.Println("Demo complete!")
 }

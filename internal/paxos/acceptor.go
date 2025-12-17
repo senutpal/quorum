@@ -215,42 +215,61 @@ package paxos
 
 import (
 	"sync"
+	"quorum/internal/storage"
 )
 
-type Acceptor struct {
-	id string
-	highestPromised ProposalNumber
-	acceptedProposal ProposalNumber
-	acceptedValue []byte
-	storage Storage
-	mu sync.Mutex
+type Storage interface {
+	SavePromised(proposal storage.ProposalNumber) error
+	LoadPromised() (storage.ProposalNumber, error)
+	SaveAccepted(proposal storage.ProposalNumber, value []byte) error
+	LoadAccepted() (storage.ProposalNumber, []byte, error)
+	Close() error
 }
 
-func NewAcceptor(id string, storage Storage) *Acceptor {
-    a := &Acceptor{
-        id:      id,
-        storage: storage,
-        
-    }
-    if data, err := storage.Load("highestPromised"); err == nil {
-        a.highestPromised = data
-    }
-    if data, err := storage.Load("acceptedProposal"); err == nil {
-        a.acceptedProposal = data
-    }
-    if data, err := storage.Load("acceptedValue"); err == nil {
-        a.acceptedValue = data
-    }
-    return a
+type Acceptor struct {
+	id               string
+	highestPromised  ProposalNumber
+	acceptedProposal ProposalNumber
+	acceptedValue    []byte
+	storage          Storage
+	mu               sync.Mutex
+}
+
+func NewAcceptor(id string, s Storage) *Acceptor {
+	a := &Acceptor{
+		id:      id,
+		storage: s,
+	}
+	if promised, err := s.LoadPromised(); err == nil {
+		a.highestPromised = ProposalNumber{
+			Round:      promised.Round,
+			ProposerID: promised.ProposerID,
+		}
+	}
+	if accepted, value, err := s.LoadAccepted(); err == nil {
+		a.acceptedProposal = ProposalNumber{
+			Round:      accepted.Round,
+			ProposerID: accepted.ProposerID,
+		}
+		a.acceptedValue = value
+	}
+	return a
+}
+
+func toStorageProposal(p ProposalNumber) storage.ProposalNumber {
+	return storage.ProposalNumber{
+		Round:      p.Round,
+		ProposerID: p.ProposerID,
+	}
 }
 
 func (a *Acceptor) HandlePrepare(msg Prepare) Promise {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	
+
 	if msg.ProposalNumber.GreaterThan(a.highestPromised) {
 		a.highestPromised = msg.ProposalNumber
-		a.storage.Save("highestPromised", a.highestPromised)
+		a.storage.SavePromised(toStorageProposal(a.highestPromised))
 		return Promise{
 			OK:               true,
 			ProposalNumber:   msg.ProposalNumber,
@@ -262,7 +281,7 @@ func (a *Acceptor) HandlePrepare(msg Prepare) Promise {
 	return Promise{
 		OK:               false,
 		ProposalNumber:   msg.ProposalNumber,
-		AcceptedProposal: a.highestPromised, 
+		AcceptedProposal: a.highestPromised,
 		From:             a.id,
 	}
 }
@@ -270,13 +289,13 @@ func (a *Acceptor) HandlePrepare(msg Prepare) Promise {
 func (a *Acceptor) HandleAccept(msg Accept) Accepted {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if msg.ProposalNumber.GreaterThan(a.highestPromised) || msg.ProposalNumber.Equal(a.highestPromised) {
 		a.highestPromised = msg.ProposalNumber
 		a.acceptedProposal = msg.ProposalNumber
 		a.acceptedValue = msg.Value
-		a.storage.Save("highestPromised", a.highestPromised)
-		a.storage.Save("acceptedProposal", a.acceptedProposal)
-		a.storage.Save("acceptedValue", a.acceptedValue)
+		a.storage.SavePromised(toStorageProposal(a.highestPromised))
+		a.storage.SaveAccepted(toStorageProposal(a.acceptedProposal), a.acceptedValue)
 		return Accepted{
 			OK:             true,
 			ProposalNumber: msg.ProposalNumber,

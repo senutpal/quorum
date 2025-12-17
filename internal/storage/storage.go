@@ -179,3 +179,49 @@
 // =============================================================================
 
 package storage
+
+type ProposalNumber struct {
+	Round      int64
+	ProposerID string
+}
+
+type Storage interface {
+	SavePromised(proposal ProposalNumber) error
+	LoadPromised() (ProposalNumber, error)
+	SaveAccepted(proposal ProposalNumber, value []byte) error
+	LoadAccepted() (ProposalNumber, []byte, error)
+	Close() error
+}
+
+type InMemoryStorage struct {
+	promised ProposalNumber
+	accepted ProposalNumber
+	value    []byte
+}
+
+func NewInMemoryStorage() Storage {
+	return &InMemoryStorage{}
+}
+
+func (s *InMemoryStorage) SavePromised(proposal ProposalNumber) error {
+	s.promised = proposal
+	return nil
+}
+
+func (s *InMemoryStorage) LoadPromised() (ProposalNumber, error) {
+	return s.promised, nil
+}
+
+func (s *InMemoryStorage) SaveAccepted(proposal ProposalNumber, value []byte) error {
+	s.accepted = proposal
+	s.value = value
+	return nil
+}
+
+func (s *InMemoryStorage) LoadAccepted() (ProposalNumber, []byte, error) {
+	return s.accepted, s.value, nil
+}
+
+func (s *InMemoryStorage) Close() error {
+	return nil
+}

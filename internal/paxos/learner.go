@@ -258,3 +258,95 @@
 // =============================================================================
 
 package paxos
+
+import "sync"
+
+type AcceptedRecord struct {
+	proposalNumber ProposalNumber
+	value          []byte
+}
+
+type AcceptedKey struct {
+	ProposalNumber ProposalNumber
+	Value          string 
+}
+
+type Learner struct {
+	id string
+	quorumSize int
+	accepted map[AcceptedKey]map[string]bool
+	chosenValue []byte
+	chosenProposal ProposalNumber
+	isChosen bool
+	mu sync.Mutex
+	chosenChan chan []byte
+}
+
+func NewLearner(id string, quorumSize int) *Learner {
+	return &Learner{
+		id: id,
+		quorumSize: quorumSize,
+		accepted: make(map[AcceptedKey]map[string]bool),
+		chosenValue: nil,
+		chosenProposal: ProposalNumber{},
+		isChosen: false,
+		mu:         sync.Mutex{},
+		chosenChan: make(chan []byte, 1),
+	}
+}
+
+func (l *Learner) HandleAccepted(msg Accepted) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.isChosen {
+		return
+	}
+
+	key := AcceptedKey{
+		ProposalNumber: msg.ProposalNumber,
+		Value:          string(msg.Value),
+	}
+
+	if _, ok := l.accepted[key]; !ok {
+		l.accepted[key] = make(map[string]bool)
+	}
+
+	l.accepted[key][msg.From] = true
+
+	if len(l.accepted[key]) >= l.quorumSize {
+		l.chosenValue = msg.Value
+		l.chosenProposal = msg.ProposalNumber
+		l.isChosen = true
+		select {
+		case l.chosenChan <- msg.Value:
+		default:
+		}
+	}
+}
+
+func (l *Learner) HandleLearn(msg Learn) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.isChosen {
+		return
+	}
+
+	l.chosenValue = msg.Value
+	l.isChosen = true
+	select {
+	case l.chosenChan <- msg.Value:
+	default:
+	}
+}
+
+func (l *Learner) GetChosenValue() ([]byte, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.chosenValue, l.isChosen
+}
+
+func (l *Learner) WaitForChosen() []byte {
+	return <-l.chosenChan
+}

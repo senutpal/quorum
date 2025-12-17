@@ -199,6 +199,8 @@ type Prepare struct {
 	From string
 }
 
+func (p Prepare) GetFrom() string { return p.From }
+
 type Promise struct {
 	ProposalNumber ProposalNumber
 	AcceptedProposal ProposalNumber
@@ -207,17 +209,23 @@ type Promise struct {
 	OK bool
 }
 
+func (p Promise) GetFrom() string { return p.From }
+
 type Reject struct {
 	ProposalNumber ProposalNumber
 	HighestSeen ProposalNumber
 	From string
 }
 
+func (r Reject) GetFrom() string { return r.From }
+
 type Accept struct {
 	ProposalNumber ProposalNumber
 	Value []byte
 	From string
 }
+
+func (a Accept) GetFrom() string { return a.From }
 
 type Accepted struct {
 	ProposalNumber ProposalNumber
@@ -226,10 +234,12 @@ type Accepted struct {
 	OK bool
 }
 
+func (a Accepted) GetFrom() string { return a.From }
+
 type Learn struct {
 	ProposalNumber ProposalNumber
 	Value []byte
 	From string
 }
 
-
+func (l Learn) GetFrom() string { return l.From }
