@@ -212,3 +212,87 @@
 // =============================================================================
 
 package paxos
+
+import (
+	"sync"
+)
+
+type Acceptor struct {
+	id string
+	highestPromised ProposalNumber
+	acceptedProposal ProposalNumber
+	acceptedValue []byte
+	storage Storage
+	mu sync.Mutex
+}
+
+func NewAcceptor(id string, storage Storage) *Acceptor {
+    a := &Acceptor{
+        id:      id,
+        storage: storage,
+        
+    }
+    if data, err := storage.Load("highestPromised"); err == nil {
+        a.highestPromised = data
+    }
+    if data, err := storage.Load("acceptedProposal"); err == nil {
+        a.acceptedProposal = data
+    }
+    if data, err := storage.Load("acceptedValue"); err == nil {
+        a.acceptedValue = data
+    }
+    return a
+}
+
+func (a *Acceptor) HandlePrepare(msg Prepare) Promise {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	
+	if msg.ProposalNumber.GreaterThan(a.highestPromised) {
+		a.highestPromised = msg.ProposalNumber
+		a.storage.Save("highestPromised", a.highestPromised)
+		return Promise{
+			OK:               true,
+			ProposalNumber:   msg.ProposalNumber,
+			AcceptedProposal: a.acceptedProposal,
+			AcceptedValue:    a.acceptedValue,
+			From:             a.id,
+		}
+	}
+	return Promise{
+		OK:               false,
+		ProposalNumber:   msg.ProposalNumber,
+		AcceptedProposal: a.highestPromised, 
+		From:             a.id,
+	}
+}
+
+func (a *Acceptor) HandleAccept(msg Accept) Accepted {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if msg.ProposalNumber.GreaterThan(a.highestPromised) || msg.ProposalNumber.Equal(a.highestPromised) {
+		a.highestPromised = msg.ProposalNumber
+		a.acceptedProposal = msg.ProposalNumber
+		a.acceptedValue = msg.Value
+		a.storage.Save("highestPromised", a.highestPromised)
+		a.storage.Save("acceptedProposal", a.acceptedProposal)
+		a.storage.Save("acceptedValue", a.acceptedValue)
+		return Accepted{
+			OK:             true,
+			ProposalNumber: msg.ProposalNumber,
+			Value:          msg.Value,
+			From:           a.id,
+		}
+	}
+	return Accepted{
+		OK:             false,
+		ProposalNumber: msg.ProposalNumber,
+		From:           a.id,
+	}
+}
+
+func (a *Acceptor) GetState() (ProposalNumber, ProposalNumber, []byte) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.highestPromised, a.acceptedProposal, a.acceptedValue
+}
