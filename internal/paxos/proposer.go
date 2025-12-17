@@ -253,3 +253,136 @@
 // =============================================================================
 
 package paxos
+
+import (
+	"errors"
+	"sync"
+)
+
+type Proposer struct {
+	id string
+	highestRound int64
+	currentProposal ProposalNumber
+	originalValue []byte
+	valueToPropose []byte
+	promise []Promise
+	quorumSize int
+	transport Transport
+	mu sync.Mutex
+}
+
+func NewProposer(id string, quorumSize int, transport Transport) *Proposer {
+	return &Proposer{
+		id:        id,
+		quorumSize: quorumSize,
+		transport: transport,
+	}
+}
+
+func (p *Proposer) Propose(value []byte) ([]byte, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.originalValue = value
+	p.valueToPropose = value
+	for {
+		p.currentProposal = p.generateProposalNumber()
+		p.promise = nil 
+		err := p.runPhase1()
+		if err != nil {
+			continue
+		}
+		err = p.runPhase2()
+		if err != nil {
+			continue
+		}
+		return p.valueToPropose, nil
+	}
+}
+
+func (p *Proposer) runPhase1() error {
+	prepareMsg := Prepare{
+		ProposalNumber: p.currentProposal,
+		From:           p.id,
+	}
+	p.transport.Broadcast(prepareMsg)
+	promiseCount := 0
+	for promiseCount < p.quorumSize {
+		msg, err := p.transport.Receive()
+		if err != nil {
+			return err
+		}
+		promise, ok := msg.(Promise)
+		if !ok {
+			continue 
+		}
+		if !promise.ProposalNumber.Equal(p.currentProposal) {
+			continue
+		}
+		if !promise.OK {
+			p.handleRejection(promise.AcceptedProposal)
+			return ErrRejected
+		}
+		p.promise = append(p.promise, promise)
+		promiseCount++
+	}
+	var highestAccepted ProposalNumber
+	for _, promise := range p.promise {
+		if !promise.AcceptedProposal.IsZero() {
+			if promise.AcceptedProposal.GreaterThan(highestAccepted) {
+				highestAccepted = promise.AcceptedProposal
+				p.valueToPropose = promise.AcceptedValue
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Proposer) runPhase2() error {
+	acceptMsg := Accept{
+		ProposalNumber: p.currentProposal,
+		Value:          p.valueToPropose,
+		From:           p.id,
+	}
+	p.transport.Broadcast(acceptMsg)
+	acceptedCount := 0
+	for acceptedCount < p.quorumSize {
+		msg, err := p.transport.Receive()
+		if err != nil {
+			return err
+		}
+		accepted, ok := msg.(Accepted)
+		if !ok {
+			continue
+		}
+		if !accepted.ProposalNumber.Equal(p.currentProposal) {
+			continue
+		}
+		if !accepted.OK {
+			return ErrRejected
+		}
+		acceptedCount++
+	}
+	learnMsg := Learn{
+		ProposalNumber: p.currentProposal,
+		Value:          p.valueToPropose,
+		From:           p.id,
+	}
+	p.transport.Broadcast(learnMsg)
+	return nil
+}
+
+func (p *Proposer) generateProposalNumber() ProposalNumber {
+	p.highestRound++
+	return ProposalNumber{
+		Round:      p.highestRound,
+		ProposerID: p.id,
+	}
+}
+
+func (p *Proposer) handleRejection(highestSeen ProposalNumber) {
+	if highestSeen.Round > p.highestRound {
+		p.highestRound = highestSeen.Round
+	}
+}
+var ErrRejected = errors.New("proposal rejected")
+
